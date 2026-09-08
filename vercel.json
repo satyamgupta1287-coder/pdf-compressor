@@ -1,0 +1,8 @@
+{
+  "version": 2,
+  "functions": {
+    "api/compress.py": {
+      "runtime": "python3.12"
+    }
+  }
+}
