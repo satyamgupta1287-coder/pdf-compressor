@@ -1,290 +1,92 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <title>PDF Compressor</title>
-
-    <style>
-        * {
-            box-sizing: border-box;
-        }
-
-        body {
-            margin: 0;
-            min-height: 100vh;
-            font-family: Arial, sans-serif;
-            background: #f4f6fb;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #172033;
-        }
-
-        .container {
-            width: 92%;
-            max-width: 550px;
-            background: white;
-            padding: 35px;
-            border-radius: 22px;
-            box-shadow: 0 15px 50px rgba(0,0,0,0.08);
-        }
-
-        h1 {
-            margin-top: 0;
-            text-align: center;
-            font-size: 30px;
-        }
-
-        .subtitle {
-            text-align: center;
-            color: #667085;
-            margin-bottom: 30px;
-        }
-
-        .upload-box {
-            border: 2px dashed #aab3c5;
-            border-radius: 18px;
-            padding: 45px 20px;
-            text-align: center;
-            cursor: pointer;
-            transition: .2s;
-        }
-
-        .upload-box:hover {
-            border-color: #5b5bd6;
-            background: #fafaff;
-        }
-
-        .upload-box strong {
-            display: block;
-            margin-bottom: 8px;
-            font-size: 18px;
-        }
-
-        .upload-box span {
-            color: #777;
-            font-size: 14px;
-        }
-
-        input[type="file"] {
-            display: none;
-        }
-
-        button {
-            width: 100%;
-            margin-top: 22px;
-            padding: 15px;
-            border: none;
-            border-radius: 12px;
-            background: #5b5bd6;
-            color: white;
-            font-size: 16px;
-            font-weight: bold;
-            cursor: pointer;
-        }
-
-        button:disabled {
-            opacity: .5;
-            cursor: not-allowed;
-        }
-
-        #status {
-            text-align: center;
-            margin-top: 18px;
-            font-size: 14px;
-        }
-
-        .file-name {
-            margin-top: 15px;
-            text-align: center;
-            word-break: break-all;
-            color: #475467;
-        }
-    </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<title>compress.pdf // scanned document shrinker</title>
+<meta name="description" content="Fast, in-memory PDF compressor built for scanned documents. Nothing is stored." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@600;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="style.css" />
 </head>
-
 <body>
 
-<div class="container">
+<div class="scanlines" aria-hidden="true"></div>
 
-    <h1>PDF Compressor</h1>
+<main class="terminal">
 
-    <div class="subtitle">
-        Compress your PDF and download it with a unique filename.
+  <header class="term-header">
+    <div class="term-dot" aria-hidden="true"></div>
+    <h1 class="title">compress<span class="title-dim">.pdf</span></h1>
+    <p class="subtitle">shrinks scanned pages. keeps nothing. runs in memory.</p>
+  </header>
+
+  <section id="panel-upload" class="panel">
+
+    <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Upload a PDF">
+      <svg class="drop-icon" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M24 6v24m0 0-9-9m9 9 9-9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M8 32v6a4 4 0 0 0 4 4h24a4 4 0 0 0 4-4v-6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <p class="drop-label">drag a pdf here</p>
+      <p class="drop-or">— or —</p>
+      <button type="button" id="chooseBtn" class="btn btn-primary">choose pdf</button>
+      <input type="file" id="fileInput" accept="application/pdf,.pdf" hidden />
     </div>
 
-    <form id="compressForm">
-
-        <label class="upload-box" for="pdf">
-
-            <strong id="chooseText">
-                Choose PDF
-            </strong>
-
-            <span>
-                Click here to select a PDF
-            </span>
-
-        </label>
-
-        <input
-            type="file"
-            id="pdf"
-            name="pdf"
-            accept=".pdf,application/pdf"
-        >
-
-        <div class="file-name" id="fileName"></div>
-
-        <button
-            id="compressButton"
-            type="submit"
-            disabled
-        >
-            Compress PDF
-        </button>
-
-        <div id="status"></div>
-
-    </form>
-
-</div>
-
-
-<script>
-
-const pdfInput = document.getElementById("pdf");
-
-const form = document.getElementById("compressForm");
-
-const button = document.getElementById("compressButton");
-
-const status = document.getElementById("status");
-
-const fileName = document.getElementById("fileName");
-
-
-pdfInput.addEventListener("change", function () {
-
-    const file = this.files[0];
-
-    if (!file) {
-        button.disabled = true;
-        fileName.textContent = "";
-        return;
-    }
-
-    if (!file.name.toLowerCase().endsWith(".pdf")) {
-
-        alert("Please select a PDF file.");
-
-        this.value = "";
-
-        button.disabled = true;
-
-        return;
-    }
-
-    fileName.textContent = file.name;
-
-    button.disabled = false;
-
-    status.textContent = "";
-
-});
-
-
-form.addEventListener("submit", async function (event) {
-
-    event.preventDefault();
-
-    const file = pdfInput.files[0];
-
-    if (!file) {
-        return;
-    }
-
-    button.disabled = true;
-
-    button.textContent = "Compressing...";
-
-    status.textContent = "Please wait...";
-
-    try {
-
-        const formData = new FormData();
-
-        formData.append("pdf", file);
-
-        const response = await fetch("/api/compress", {
-            method: "POST",
-            body: formData
-        });
-
-        if (!response.ok) {
-
-            throw new Error("Compression failed");
-
-        }
-
-        const blob = await response.blob();
-
-        const disposition =
-            response.headers.get("Content-Disposition");
-
-        let filename = "compressed.pdf";
-
-        if (disposition) {
-
-            const match =
-                disposition.match(/filename="([^"]+)"/);
-
-            if (match) {
-                filename = match[1];
-            }
-
-        }
-
-        const url =
-            window.URL.createObjectURL(blob);
-
-        const a =
-            document.createElement("a");
-
-        a.href = url;
-
-        a.download = filename;
-
-        document.body.appendChild(a);
-
-        a.click();
-
-        a.remove();
-
-        window.URL.revokeObjectURL(url);
-
-        status.textContent =
-            "PDF downloaded successfully: " + filename;
-
-    } catch (error) {
-
-        console.error(error);
-
-        status.textContent =
-            "Something went wrong. Please try again.";
-
-    }
-
-    button.disabled = false;
-
-    button.textContent = "Compress PDF";
-
-});
-
-</script>
-
+    <div id="fileInfo" class="file-info hidden">
+      <div class="file-row">
+        <span class="file-label">file</span>
+        <span id="fileName" class="file-value">—</span>
+      </div>
+      <div class="file-row">
+        <span class="file-label">size</span>
+        <span id="fileSize" class="file-value">—</span>
+      </div>
+    </div>
+
+    <div id="levelSelect" class="level-select hidden">
+      <span class="level-caption">compression level</span>
+      <div class="level-options">
+        <button type="button" class="level-btn" data-level="low">low</button>
+        <button type="button" class="level-btn is-active" data-level="medium">medium</button>
+        <button type="button" class="level-btn" data-level="high">high</button>
+      </div>
+      <p id="levelHint" class="level-hint">balanced — good size, good clarity</p>
+    </div>
+
+    <button type="button" id="compressBtn" class="btn btn-primary btn-compress hidden">compress pdf</button>
+
+    <p id="errorMsg" class="error-msg hidden" role="alert"></p>
+  </section>
+
+  <section id="panel-loading" class="panel hidden">
+    <div class="loading-block">
+      <div class="loading-bar"><div class="loading-fill"></div></div>
+      <p id="loadingText" class="loading-text">processing pages&hellip;</p>
+    </div>
+  </section>
+
+  <section id="panel-result" class="panel hidden">
+    <div class="log">
+      <p class="log-line"><span class="log-prompt">&gt;</span> original &nbsp; <span id="resOriginal">—</span></p>
+      <p class="log-line"><span class="log-prompt">&gt;</span> compressed &nbsp; <span id="resCompressed">—</span></p>
+      <p class="log-line log-highlight"><span class="log-prompt">&gt;</span> saved &nbsp; <span id="resPercent">—</span></p>
+    </div>
+
+    <div class="result-actions">
+      <button type="button" id="downloadBtn" class="btn btn-primary">download pdf</button>
+      <button type="button" id="resetBtn" class="btn btn-ghost">compress another</button>
+    </div>
+  </section>
+
+  <footer class="term-footer">
+    <p>files are never written to disk. processed in memory, sent back, discarded.</p>
+  </footer>
+
+</main>
+
+<script src="app.js"></script>
 </body>
 </html>

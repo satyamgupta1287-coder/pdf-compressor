@@ -1,1 +1,2 @@
-pypdf
+PyMuPDF==1.24.9
+Pillow==10.4.0
