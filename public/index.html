@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>PDF Compressor</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: Arial, sans-serif;
+            background: #f4f6fb;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #172033;
+        }
+
+        .container {
+            width: 92%;
+            max-width: 550px;
+            background: white;
+            padding: 35px;
+            border-radius: 22px;
+            box-shadow: 0 15px 50px rgba(0,0,0,0.08);
+        }
+
+        h1 {
+            margin-top: 0;
+            text-align: center;
+            font-size: 30px;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #667085;
+            margin-bottom: 30px;
+        }
+
+        .upload-box {
+            border: 2px dashed #aab3c5;
+            border-radius: 18px;
+            padding: 45px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: .2s;
+        }
+
+        .upload-box:hover {
+            border-color: #5b5bd6;
+            background: #fafaff;
+        }
+
+        .upload-box strong {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 18px;
+        }
+
+        .upload-box span {
+            color: #777;
+            font-size: 14px;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        button {
+            width: 100%;
+            margin-top: 22px;
+            padding: 15px;
+            border: none;
+            border-radius: 12px;
+            background: #5b5bd6;
+            color: white;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            opacity: .5;
+            cursor: not-allowed;
+        }
+
+        #status {
+            text-align: center;
+            margin-top: 18px;
+            font-size: 14px;
+        }
+
+        .file-name {
+            margin-top: 15px;
+            text-align: center;
+            word-break: break-all;
+            color: #475467;
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <h1>PDF Compressor</h1>
+
+    <div class="subtitle">
+        Compress your PDF and download it with a unique filename.
+    </div>
+
+    <form id="compressForm">
+
+        <label class="upload-box" for="pdf">
+
+            <strong id="chooseText">
+                Choose PDF
+            </strong>
+
+            <span>
+                Click here to select a PDF
+            </span>
+
+        </label>
+
+        <input
+            type="file"
+            id="pdf"
+            name="pdf"
+            accept=".pdf,application/pdf"
+        >
+
+        <div class="file-name" id="fileName"></div>
+
+        <button
+            id="compressButton"
+            type="submit"
+            disabled
+        >
+            Compress PDF
+        </button>
+
+        <div id="status"></div>
+
+    </form>
+
+</div>
+
+
+<script>
+
+const pdfInput = document.getElementById("pdf");
+
+const form = document.getElementById("compressForm");
+
+const button = document.getElementById("compressButton");
+
+const status = document.getElementById("status");
+
+const fileName = document.getElementById("fileName");
+
+
+pdfInput.addEventListener("change", function () {
+
+    const file = this.files[0];
+
+    if (!file) {
+        button.disabled = true;
+        fileName.textContent = "";
+        return;
+    }
+
+    if (!file.name.toLowerCase().endsWith(".pdf")) {
+
+        alert("Please select a PDF file.");
+
+        this.value = "";
+
+        button.disabled = true;
+
+        return;
+    }
+
+    fileName.textContent = file.name;
+
+    button.disabled = false;
+
+    status.textContent = "";
+
+});
+
+
+form.addEventListener("submit", async function (event) {
+
+    event.preventDefault();
+
+    const file = pdfInput.files[0];
+
+    if (!file) {
+        return;
+    }
+
+    button.disabled = true;
+
+    button.textContent = "Compressing...";
+
+    status.textContent = "Please wait...";
+
+    try {
+
+        const formData = new FormData();
+
+        formData.append("pdf", file);
+
+        const response = await fetch("/api/compress", {
+            method: "POST",
+            body: formData
+        });
+
+        if (!response.ok) {
+
+            throw new Error("Compression failed");
+
+        }
+
+        const blob = await response.blob();
+
+        const disposition =
+            response.headers.get("Content-Disposition");
+
+        let filename = "compressed.pdf";
+
+        if (disposition) {
+
+            const match =
+                disposition.match(/filename="([^"]+)"/);
+
+            if (match) {
+                filename = match[1];
+            }
+
+        }
+
+        const url =
+            window.URL.createObjectURL(blob);
+
+        const a =
+            document.createElement("a");
+
+        a.href = url;
+
+        a.download = filename;
+
+        document.body.appendChild(a);
+
+        a.click();
+
+        a.remove();
+
+        window.URL.revokeObjectURL(url);
+
+        status.textContent =
+            "PDF downloaded successfully: " + filename;
+
+    } catch (error) {
+
+        console.error(error);
+
+        status.textContent =
+            "Something went wrong. Please try again.";
+
+    }
+
+    button.disabled = false;
+
+    button.textContent = "Compress PDF";
+
+});
+
+</script>
+
+</body>
+</html>
