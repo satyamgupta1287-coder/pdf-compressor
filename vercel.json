@@ -2,7 +2,7 @@
   "functions": {
     "api/compress.py": {
       "maxDuration": 60,
-      "memory": 1536
+      "memory": 3008
     }
   }
 }

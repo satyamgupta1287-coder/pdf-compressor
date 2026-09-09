@@ -19,6 +19,14 @@
     return "smallest file — more aggressive";
   }
 
+  // Client-side heuristic only — a real prediction would require actually
+  // compressing the file. This gives instant feedback while dragging the
+  // slider; the exact number always comes from the server after compressing.
+  function estimateRatio(strength) {
+    const t = strength / 100;
+    return 0.65 * Math.pow(1 - t, 1.8) + 0.02;
+  }
+
   const dropzone = document.getElementById("dropzone");
   const chooseBtn = document.getElementById("chooseBtn");
   const fileInput = document.getElementById("fileInput");
@@ -32,6 +40,7 @@
   const strengthSlider = document.getElementById("strengthSlider");
   const strengthValueEl = document.getElementById("strengthValue");
   const strengthDescEl = document.getElementById("strengthDesc");
+  const estimateValueEl = document.getElementById("estimateValue");
 
   const compressBtn = document.getElementById("compressBtn");
   const errorMsg = document.getElementById("errorMsg");
@@ -116,6 +125,8 @@
     fileInfo.classList.remove("hidden");
     levelSelect.classList.remove("hidden");
     compressBtn.classList.remove("hidden");
+
+    setStrength(selectedStrength); // populate the KB estimate for this file
   }
 
   // ---------- upload interactions ----------
@@ -168,6 +179,12 @@
     strengthSlider.value = String(selectedStrength);
     strengthValueEl.textContent = String(selectedStrength);
     strengthDescEl.textContent = strengthHint(selectedStrength);
+
+    if (selectedFile) {
+      const estimatedBytes = Math.round(selectedFile.size * estimateRatio(selectedStrength));
+      const savedPct = Math.round((1 - estimateRatio(selectedStrength)) * 100);
+      estimateValueEl.textContent = `~${formatBytes(estimatedBytes)} (~${savedPct}% smaller)`;
+    }
 
     if (syncPresets) {
       levelBtns.forEach((b) => {
