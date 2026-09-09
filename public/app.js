@@ -2,12 +2,22 @@
   "use strict";
 
   const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // keep in sync with api/compress.py
+  const FILENAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-  const LEVEL_HINTS = {
-    low: "lightest compression — best quality",
-    medium: "balanced — good size, good clarity",
-    high: "smallest file — more aggressive",
-  };
+  function randomAlphaFilename() {
+    const length = 10 + Math.floor(Math.random() * 7); // 10-16 chars
+    let name = "";
+    for (let i = 0; i < length; i++) {
+      name += FILENAME_CHARS[Math.floor(Math.random() * FILENAME_CHARS.length)];
+    }
+    return `${name}.pdf`;
+  }
+
+  function strengthHint(strength) {
+    if (strength <= 30) return "lightest compression — best quality";
+    if (strength <= 65) return "balanced — good size, good clarity";
+    return "smallest file — more aggressive";
+  }
 
   const dropzone = document.getElementById("dropzone");
   const chooseBtn = document.getElementById("chooseBtn");
@@ -19,7 +29,9 @@
 
   const levelSelect = document.getElementById("levelSelect");
   const levelBtns = Array.from(document.querySelectorAll(".level-btn"));
-  const levelHint = document.getElementById("levelHint");
+  const strengthSlider = document.getElementById("strengthSlider");
+  const strengthValueEl = document.getElementById("strengthValue");
+  const strengthDescEl = document.getElementById("strengthDesc");
 
   const compressBtn = document.getElementById("compressBtn");
   const errorMsg = document.getElementById("errorMsg");
@@ -36,9 +48,8 @@
   const resetBtn = document.getElementById("resetBtn");
 
   let selectedFile = null;
-  let selectedLevel = "medium";
+  let selectedStrength = 50;
   let pendingBlobUrl = null;
-  let pendingFilename = null;
 
   // ---------- helpers ----------
 
@@ -72,11 +83,12 @@
       URL.revokeObjectURL(pendingBlobUrl);
       pendingBlobUrl = null;
     }
-    pendingFilename = null;
 
     panelResult.classList.add("hidden");
     panelLoading.classList.add("hidden");
     panelUpload.classList.remove("hidden");
+
+    setStrength(50);
   }
 
   function handleFile(file) {
@@ -149,15 +161,31 @@
     }
   });
 
-  // ---------- level selection ----------
+  // ---------- compression strength (slider + presets) ----------
+
+  function setStrength(value, { syncPresets = true } = {}) {
+    selectedStrength = Math.max(0, Math.min(100, value));
+    strengthSlider.value = String(selectedStrength);
+    strengthValueEl.textContent = String(selectedStrength);
+    strengthDescEl.textContent = strengthHint(selectedStrength);
+
+    if (syncPresets) {
+      levelBtns.forEach((b) => {
+        b.classList.toggle("is-active", Number(b.dataset.strength) === selectedStrength);
+      });
+    } else {
+      levelBtns.forEach((b) => b.classList.remove("is-active"));
+    }
+  }
 
   levelBtns.forEach((btn) => {
     btn.addEventListener("click", () => {
-      levelBtns.forEach((b) => b.classList.remove("is-active"));
-      btn.classList.add("is-active");
-      selectedLevel = btn.dataset.level;
-      levelHint.textContent = LEVEL_HINTS[selectedLevel] || "";
+      setStrength(Number(btn.dataset.strength));
     });
+  });
+
+  strengthSlider.addEventListener("input", () => {
+    setStrength(Number(strengthSlider.value), { syncPresets: true });
   });
 
   // ---------- compress ----------
@@ -172,7 +200,7 @@
 
     const formData = new FormData();
     formData.append("file", selectedFile);
-    formData.append("level", selectedLevel);
+    formData.append("strength", String(selectedStrength));
 
     try {
       const response = await fetch("/api/compress", {
@@ -197,13 +225,11 @@
       const originalSize = parseInt(response.headers.get("X-Original-Size") || "0", 10);
       const compressedSize = parseInt(response.headers.get("X-Compressed-Size") || "0", 10);
       const percentSaved = response.headers.get("X-Percent-Saved") || "0";
-      const filename = response.headers.get("X-Filename") || "compressed.pdf";
 
       const blob = await response.blob();
 
       if (pendingBlobUrl) URL.revokeObjectURL(pendingBlobUrl);
       pendingBlobUrl = URL.createObjectURL(blob);
-      pendingFilename = filename;
 
       resOriginal.textContent = formatBytes(originalSize);
       resCompressed.textContent = formatBytes(compressedSize);
@@ -212,7 +238,9 @@
       panelLoading.classList.add("hidden");
       panelResult.classList.remove("hidden");
 
-      triggerDownload(pendingBlobUrl, pendingFilename);
+      // Every download — including this first automatic one — gets its
+      // own fresh alphabet-only filename, even for the same compressed file.
+      triggerDownload(pendingBlobUrl);
     } catch (err) {
       panelLoading.classList.add("hidden");
       panelUpload.classList.remove("hidden");
@@ -220,18 +248,18 @@
     }
   });
 
-  function triggerDownload(blobUrl, filename) {
+  function triggerDownload(blobUrl) {
     const a = document.createElement("a");
     a.href = blobUrl;
-    a.download = filename;
+    a.download = randomAlphaFilename();
     document.body.appendChild(a);
     a.click();
     a.remove();
   }
 
   downloadBtn.addEventListener("click", () => {
-    if (pendingBlobUrl && pendingFilename) {
-      triggerDownload(pendingBlobUrl, pendingFilename);
+    if (pendingBlobUrl) {
+      triggerDownload(pendingBlobUrl);
     }
   });
 

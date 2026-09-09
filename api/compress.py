@@ -4,7 +4,10 @@
 Vercel Python Serverless Function.
 Accepts a multipart/form-data POST with fields:
   - file: the PDF to compress
-  - level: "low" | "medium" | "high"  (default "medium")
+  - strength: "0"-"100" (0 = best quality/least compression,
+              100 = smallest file/most compression). Default 50.
+  - level: "low" | "medium" | "high" — legacy alternative to `strength`,
+           used only if `strength` isn't sent. Default "medium".
 
 Returns the compressed PDF as a raw binary response with:
   - Content-Type: application/pdf
@@ -30,14 +33,31 @@ from http.server import BaseHTTPRequestHandler
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB hard cap (tune for your Vercel plan)
 
-# Per-level tuning. Scanned pages are fully re-rasterized at these settings.
-# Digital/text pages only have their embedded images recompressed.
-LEVELS = {
-    "low": {"dpi": 200, "jpg_quality": 85, "max_image_dim": 2200},
-    "medium": {"dpi": 150, "jpg_quality": 65, "max_image_dim": 1600},
-    "high": {"dpi": 100, "jpg_quality": 45, "max_image_dim": 1200},
-}
+# Continuous compression control. strength=0 keeps the most quality/least
+# compression; strength=100 pushes for the smallest possible file. Scanned
+# pages are fully re-rasterized at the resulting dpi/quality/max_image_dim.
+# Digital/text pages only have their embedded images recompressed at them.
+STRENGTH_MIN_DPI, STRENGTH_MAX_DPI = 72, 220
+STRENGTH_MIN_QUALITY, STRENGTH_MAX_QUALITY = 22, 90
+STRENGTH_MIN_DIM, STRENGTH_MAX_DIM = 900, 2400
+DEFAULT_STRENGTH = 50
+
+# Legacy named presets, kept for backward compatibility / quick-select
+# buttons on the frontend. Each maps to an equivalent strength value.
+LEVEL_TO_STRENGTH = {"low": 20, "medium": 50, "high": 80}
 DEFAULT_LEVEL = "medium"
+
+
+def settings_from_strength(strength: int):
+    """Map a 0-100 strength value to dpi / jpg_quality / max_image_dim."""
+    strength = max(0, min(100, strength))
+    t = strength / 100.0
+    dpi = round(STRENGTH_MAX_DPI - t * (STRENGTH_MAX_DPI - STRENGTH_MIN_DPI))
+    quality = round(
+        STRENGTH_MAX_QUALITY - t * (STRENGTH_MAX_QUALITY - STRENGTH_MIN_QUALITY)
+    )
+    max_dim = round(STRENGTH_MAX_DIM - t * (STRENGTH_MAX_DIM - STRENGTH_MIN_DIM))
+    return {"dpi": dpi, "jpg_quality": quality, "max_image_dim": max_dim}
 
 # A page is treated as "scanned" (raster-recompress the whole page) when the
 # average extractable text per sampled page is below this many characters.
@@ -153,8 +173,8 @@ def rasterize_page(src_doc, new_doc, page, settings):
     new_page.insert_image(new_page.rect, stream=jpeg_bytes)
 
 
-def compress_pdf(file_bytes: bytes, level: str):
-    settings = LEVELS.get(level, LEVELS[DEFAULT_LEVEL])
+def compress_pdf(file_bytes: bytes, strength: int):
+    settings = settings_from_strength(strength)
 
     src_doc = fitz.open(stream=file_bytes, filetype="pdf")
 
@@ -251,12 +271,19 @@ class handler(BaseHTTPRequestHandler):
             self._send_json_error(400, "Uploaded file is not a valid PDF.")
             return
 
-        level = fields.get("level", DEFAULT_LEVEL).lower()
-        if level not in LEVELS:
-            level = DEFAULT_LEVEL
+        strength_raw = fields.get("strength")
+        if strength_raw is not None:
+            try:
+                strength = int(round(float(strength_raw)))
+            except (TypeError, ValueError):
+                strength = DEFAULT_STRENGTH
+        else:
+            level = fields.get("level", DEFAULT_LEVEL).lower()
+            strength = LEVEL_TO_STRENGTH.get(level, DEFAULT_STRENGTH)
+        strength = max(0, min(100, strength))
 
         try:
-            compressed_bytes = compress_pdf(file_bytes, level)
+            compressed_bytes = compress_pdf(file_bytes, strength)
         except ValueError as e:
             if str(e) == "ENCRYPTED":
                 self._send_json_error(

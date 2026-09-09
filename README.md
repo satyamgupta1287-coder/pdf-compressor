@@ -35,7 +35,7 @@ of the exact same file.
   index.html
   style.css
   app.js
-requirements.txt
+pyproject.toml      # Python deps + entrypoint, read by Vercel's uv-based builder
 vercel.json
 ```
 
@@ -43,10 +43,11 @@ vercel.json
 
 1. Push this project to a GitHub repo.
 2. Import the repo in Vercel ("Add New Project").
-3. Framework preset: **Other**. No build command is needed — Vercel
-   detects `requirements.txt` and installs the Python dependencies for
-   `api/compress.py` automatically, and serves everything in `/public`
-   as static files.
+3. Framework preset: **Other**. No build command is needed — Vercel's
+   Python builder reads `pyproject.toml`, installs `PyMuPDF`/`Pillow` with
+   `uv`, and wires up `api/compress.py` using the
+   `[tool.vercel] entrypoint = "api.compress:handler"` declaration.
+   Everything in `/public` is served as static files automatically.
 4. Deploy. Your site will be live at `https://<project>.vercel.app`.
 
 No `npm install` or Node build step is required for this project.

@@ -49,11 +49,17 @@
     <div id="levelSelect" class="level-select hidden">
       <span class="level-caption">compression level</span>
       <div class="level-options">
-        <button type="button" class="level-btn" data-level="low">low</button>
-        <button type="button" class="level-btn is-active" data-level="medium">medium</button>
-        <button type="button" class="level-btn" data-level="high">high</button>
+        <button type="button" class="level-btn" data-strength="20">low</button>
+        <button type="button" class="level-btn is-active" data-strength="50">medium</button>
+        <button type="button" class="level-btn" data-strength="80">high</button>
       </div>
-      <p id="levelHint" class="level-hint">balanced — good size, good clarity</p>
+
+      <div class="strength-row">
+        <span class="strength-label">quality</span>
+        <input type="range" id="strengthSlider" class="strength-slider" min="0" max="100" step="1" value="50" />
+        <span class="strength-label">smaller</span>
+      </div>
+      <p class="level-hint">strength: <span id="strengthValue">50</span>% — <span id="strengthDesc">balanced — good size, good clarity</span></p>
     </div>
 
     <button type="button" id="compressBtn" class="btn btn-primary btn-compress hidden">compress pdf</button>
