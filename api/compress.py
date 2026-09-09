@@ -1,7 +1,10 @@
 """
 /api/compress.py
 
-Vercel Python Serverless Function.
+Vercel Python Serverless Function. Thin HTTP wrapper — all actual
+compression logic lives in core/compress_core.py, shared with the
+Render/Flask entrypoint (app.py) so behavior is identical either way.
+
 Accepts a multipart/form-data POST with fields:
   - file: the PDF to compress
   - strength: "0"-"100" (0 = best quality/least compression,
@@ -16,64 +19,36 @@ Returns the compressed PDF as a raw binary response with:
 
 No file is ever written to disk. Everything happens in memory and the
 process exits when the response is sent, so nothing is retained.
+
+NOTE ON SPEED: Vercel Python functions cold-start on infrequent traffic —
+importing PyMuPDF/Pillow fresh and booting the container adds latency on
+top of the actual compression time. If consistent low latency matters
+more than serverless convenience, deploy app.py to Render (or any
+always-on host) instead — see README.md.
 """
 
-import io
 import json
-import random
 import re
-import string
-import fitz  # PyMuPDF
-from PIL import Image
+import sys
+import os
 from http.server import BaseHTTPRequestHandler
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
+# Make the project root importable so `core.compress_core` resolves
+# regardless of how Vercel's Python runtime sets up sys.path.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB hard cap (tune for your Vercel plan)
-
-# Continuous compression control. strength=0 keeps the most quality/least
-# compression; strength=100 pushes for the smallest possible file. Scanned
-# pages are fully re-rasterized at the resulting dpi/quality/max_image_dim.
-# Digital/text pages only have their embedded images recompressed at them.
-STRENGTH_MIN_DPI, STRENGTH_MAX_DPI = 72, 220
-STRENGTH_MIN_QUALITY, STRENGTH_MAX_QUALITY = 22, 90
-STRENGTH_MIN_DIM, STRENGTH_MAX_DIM = 900, 2400
-DEFAULT_STRENGTH = 50
-
-# Legacy named presets, kept for backward compatibility / quick-select
-# buttons on the frontend. Each maps to an equivalent strength value.
-LEVEL_TO_STRENGTH = {"low": 20, "medium": 50, "high": 80}
-DEFAULT_LEVEL = "medium"
-
-
-def settings_from_strength(strength: int):
-    """Map a 0-100 strength value to dpi / jpg_quality / max_image_dim."""
-    strength = max(0, min(100, strength))
-    t = strength / 100.0
-    dpi = round(STRENGTH_MAX_DPI - t * (STRENGTH_MAX_DPI - STRENGTH_MIN_DPI))
-    quality = round(
-        STRENGTH_MAX_QUALITY - t * (STRENGTH_MAX_QUALITY - STRENGTH_MIN_QUALITY)
-    )
-    max_dim = round(STRENGTH_MAX_DIM - t * (STRENGTH_MAX_DIM - STRENGTH_MIN_DIM))
-    return {"dpi": dpi, "jpg_quality": quality, "max_image_dim": max_dim}
-
-# A page is treated as "scanned" (raster-recompress the whole page) when the
-# average extractable text per sampled page is below this many characters.
-SCANNED_TEXT_THRESHOLD = 30
-SAMPLE_PAGES = 3  # fewer pages sampled = faster scanned/digital detection
+from core.compress_core import (  # noqa: E402
+    MAX_UPLOAD_BYTES,
+    compress_pdf,
+    percent_saved,
+    random_alpha_filename,
+    resolve_strength,
+)
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Multipart parsing (Vercel's raw Python runtime has no request-parsing
+# helpers built in, unlike Flask/FastAPI, so this is done by hand)
 # ---------------------------------------------------------------------------
-
-
-def random_alpha_filename():
-    """Generate a fresh, alphabet-only filename like 'QwertyUiOpAsdf.pdf'."""
-    length = random.randint(10, 16)
-    name = "".join(random.choices(string.ascii_letters, k=length))
-    return f"{name}.pdf"
 
 
 def parse_multipart(body: bytes, boundary: bytes):
@@ -90,10 +65,8 @@ def parse_multipart(body: bytes, boundary: bytes):
         part = raw
         if part in (b"", b"--", b"--\r\n") or part.startswith(b"--\r\n"):
             continue
-        # Strip leading CRLF left over from the boundary split
         if part.startswith(b"\r\n"):
             part = part[2:]
-        # Strip trailing CRLF before the next boundary
         if part.endswith(b"\r\n"):
             part = part[:-2]
         if b"\r\n\r\n" not in part:
@@ -115,107 +88,6 @@ def parse_multipart(body: bytes, boundary: bytes):
         else:
             fields[field_name] = content.decode("utf-8", errors="ignore")
     return fields, files
-
-
-def recompress_page_images(doc, page, settings):
-    """Digital/text page: recompress embedded raster images in place."""
-    quality = settings["jpg_quality"]
-    max_dim = settings["max_image_dim"]
-
-    for img in page.get_images(full=True):
-        xref = img[0]
-        try:
-            base = doc.extract_image(xref)
-            img_bytes = base["image"]
-            pil_img = Image.open(io.BytesIO(img_bytes))
-
-            if pil_img.mode in ("RGBA", "P", "LA"):
-                pil_img = pil_img.convert("RGB")
-            elif pil_img.mode not in ("RGB", "L"):
-                pil_img = pil_img.convert("RGB")
-
-            w, h = pil_img.size
-            if max(w, h) > max_dim:
-                scale = max_dim / float(max(w, h))
-                pil_img = pil_img.resize(
-                    (max(1, int(w * scale)), max(1, int(h * scale))),
-                    Image.LANCZOS,
-                )
-
-            out = io.BytesIO()
-            # optimize=False trades a little size for meaningfully faster
-            # encoding — matters most on multi-page scanned documents.
-            pil_img.save(out, format="JPEG", quality=quality, optimize=False)
-            new_bytes = out.getvalue()
-
-            # Only replace if we actually made it smaller
-            if len(new_bytes) < len(img_bytes):
-                page.replace_image(xref, stream=new_bytes)
-        except Exception:
-            # Skip any image we can't safely recompress (masks, CMYK, etc.)
-            continue
-
-
-def rasterize_page(src_doc, new_doc, page, settings):
-    """Scanned page: render the whole page to a JPEG and rebuild it."""
-    dpi = settings["dpi"]
-    quality = settings["jpg_quality"]
-
-    rect = page.rect
-    zoom = dpi / 72.0
-    matrix = fitz.Matrix(zoom, zoom)
-    pix = page.get_pixmap(matrix=matrix, colorspace=fitz.csRGB, alpha=False)
-
-    pil_img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-    out = io.BytesIO()
-    # optimize=False is the single biggest speed lever here — on a
-    # multi-page scanned PDF it cuts total processing time by roughly a
-    # third, at the cost of a modest size increase (~8-10%).
-    pil_img.save(out, format="JPEG", quality=quality, optimize=False)
-    jpeg_bytes = out.getvalue()
-
-    new_page = new_doc.new_page(width=rect.width, height=rect.height)
-    new_page.insert_image(new_page.rect, stream=jpeg_bytes)
-
-
-def compress_pdf(file_bytes: bytes, strength: int):
-    settings = settings_from_strength(strength)
-
-    src_doc = fitz.open(stream=file_bytes, filetype="pdf")
-
-    if src_doc.needs_pass:
-        src_doc.close()
-        raise ValueError("ENCRYPTED")
-
-    page_count = src_doc.page_count
-    if page_count == 0:
-        src_doc.close()
-        raise ValueError("EMPTY")
-
-    sample_n = min(SAMPLE_PAGES, page_count)
-    sampled_text_len = sum(
-        len(src_doc[i].get_text("text").strip()) for i in range(sample_n)
-    )
-    avg_text = sampled_text_len / sample_n
-    scanned_mode = avg_text < SCANNED_TEXT_THRESHOLD
-
-    if scanned_mode:
-        new_doc = fitz.open()
-        for i in range(page_count):
-            rasterize_page(src_doc, new_doc, src_doc[i], settings)
-        new_doc.set_metadata({})
-        out = io.BytesIO()
-        new_doc.save(out, garbage=4, deflate=True, clean=True)
-        new_doc.close()
-    else:
-        for i in range(page_count):
-            recompress_page_images(src_doc, src_doc[i], settings)
-        src_doc.set_metadata({})
-        out = io.BytesIO()
-        src_doc.save(out, garbage=4, deflate=True, clean=True)
-
-    src_doc.close()
-    return out.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -276,16 +148,7 @@ class handler(BaseHTTPRequestHandler):
             self._send_json_error(400, "Uploaded file is not a valid PDF.")
             return
 
-        strength_raw = fields.get("strength")
-        if strength_raw is not None:
-            try:
-                strength = int(round(float(strength_raw)))
-            except (TypeError, ValueError):
-                strength = DEFAULT_STRENGTH
-        else:
-            level = fields.get("level", DEFAULT_LEVEL).lower()
-            strength = LEVEL_TO_STRENGTH.get(level, DEFAULT_STRENGTH)
-        strength = max(0, min(100, strength))
+        strength = resolve_strength(fields.get("strength"), fields.get("level"))
 
         try:
             compressed_bytes = compress_pdf(file_bytes, strength)
@@ -306,14 +169,7 @@ class handler(BaseHTTPRequestHandler):
             return
 
         compressed_size = len(compressed_bytes)
-
-        # Guard against the rare case where compression didn't help
-        # (e.g. an already tiny or heavily optimized file).
-        if compressed_size >= original_size:
-            percent_saved = 0
-        else:
-            percent_saved = round((1 - (compressed_size / original_size)) * 100, 1)
-
+        saved_pct = percent_saved(original_size, compressed_size)
         download_name = random_alpha_filename()
 
         self.send_response(200)
@@ -325,7 +181,7 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("X-Filename", download_name)
         self.send_header("X-Original-Size", str(original_size))
         self.send_header("X-Compressed-Size", str(compressed_size))
-        self.send_header("X-Percent-Saved", str(percent_saved))
+        self.send_header("X-Percent-Saved", str(saved_pct))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(compressed_bytes)
